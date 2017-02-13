@@ -18,24 +18,7 @@ cd "$(dirname "${BASH_SOURCE}")"
 source cni-plugin.sh
 source docker-bootstrap.sh
 
-kube::multinode::main(){
-
-  # Require root
-  if [[ "$(id -u)" != "0" ]]; then
-    kube::log::fatal "Please run as root"
-  fi
-
-  for tool in curl ip docker; do
-    if [[ ! -f $(which ${tool} 2>&1) ]]; then
-      kube::log::fatal "The binary ${tool} is required. Install it."
-    fi
-  done
-
-  # Make sure docker daemon is running
-  if [[ $(docker ps 2>&1 1>/dev/null; echo $?) != 0 ]]; then
-    kube::log::fatal "Docker is not running on this machine!"
-  fi
-
+kube::multinode::init_params(){
   LATEST_STABLE_K8S_VERSION=$(curl -sSL "https://storage.googleapis.com/kubernetes-release/release/stable.txt")
   K8S_VERSION=${K8S_VERSION:-${LATEST_STABLE_K8S_VERSION}}
 
@@ -66,6 +49,27 @@ kube::multinode::main(){
   BOOTSTRAP_DOCKER_SOCK="unix:///var/run/docker-bootstrap.sock"
   BOOTSTRAP_DOCKER_PARAM="-H ${BOOTSTRAP_DOCKER_SOCK}"
   ETCD_NET_PARAM="--net host"
+}
+
+kube::multinode::main(){
+
+  # Require root
+  if [[ "$(id -u)" != "0" ]]; then
+    kube::log::fatal "Please run as root"
+  fi
+
+  for tool in curl ip docker; do
+    if [[ ! -f $(which ${tool} 2>&1) ]]; then
+      kube::log::fatal "The binary ${tool} is required. Install it."
+    fi
+  done
+
+  # Make sure docker daemon is running
+  if [[ $(docker ps 2>&1 1>/dev/null; echo $?) != 0 ]]; then
+    kube::log::fatal "Docker is not running on this machine!"
+  fi
+
+  kube::multinode::init_params
 
   if [[ ${USE_CONTAINERIZED} == "true" ]]; then
     ROOTFS_MOUNT="-v /:/rootfs:ro"
@@ -80,7 +84,6 @@ kube::multinode::main(){
   KUBELET_MOUNTS="\
     ${ROOTFS_MOUNT} \
     -v /sys:/sys:rw \
-    -v /var/run:/var/run:rw \
     -v /run:/run:rw \
     -v /var/lib/docker:/var/lib/docker:rw \
     ${KUBELET_MOUNT} \
@@ -101,6 +104,8 @@ kube::multinode::main(){
 
 # Ensure everything is OK, docker is running and we're root
 kube::multinode::log_variables() {
+
+  kube::multinode::init_params
 
   kube::helpers::parse_version ${K8S_VERSION}
 
@@ -125,6 +130,19 @@ kube::multinode::start_etcd() {
 
   kube::log::status "Launching etcd..."
 
+  kube::multinode::init_params
+
+  if [[ -n "${ETCD_INITIAL_CLUSTER}" ]] ; then
+    ETCD_INITIAL_CONFIG="\
+      --initial-advertise-peer-urls http://${IP_ADDRESS}:2380 \
+      --initial-cluster ${ETCD_INITIAL_CLUSTER} \
+      --initial-cluster-state new \
+      --initial-cluster-token etcd-cluster-1 \
+      --name ${ETCD_NODE_NAME}"
+  else
+    ETCD_INITIAL_CONFIG=""
+  fi
+
   # TODO: Remove the 4001 port as it is deprecated
   docker ${BOOTSTRAP_DOCKER_PARAM} run -d \
     --name kube_etcd_$(kube::helpers::small_sha) \
@@ -136,6 +154,8 @@ kube::multinode::start_etcd() {
       --listen-client-urls=http://0.0.0.0:2379,http://0.0.0.0:4001 \
       --advertise-client-urls=http://localhost:2379,http://localhost:4001 \
       --listen-peer-urls=http://0.0.0.0:2380 \
+      ${ETCD_INITIAL_CONFIG} \
+      --force-new-cluster \
       --data-dir=/var/etcd/data
 
   # Wait for etcd to come up
@@ -287,12 +307,12 @@ kube::multinode::turndown(){
   fi
 
   if [[ -d /var/lib/kubelet ]]; then
-    read -p "Do you want to clean /var/lib/kubelet? [Y/n] " clean_kubelet_dir
+    read -p "Do you want to clean /var/lib/kubelet? [y/N] " clean_kubelet_dir
 
     case $clean_kubelet_dir in
-      [nN]*)
-        ;; # Do nothing
       *)
+        ;; # Do nothing
+      [yY]*)
         # umount if there are mounts in /var/lib/kubelet
         if [[ ! -z $(mount | grep "/var/lib/kubelet" | awk '{print $3}') ]]; then
 
