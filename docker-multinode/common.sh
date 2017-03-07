@@ -15,6 +15,7 @@
 # limitations under the License.
 
 cd "$(dirname "${BASH_SOURCE}")"
+source ./vars.sh
 source cni-plugin.sh
 source docker-bootstrap.sh
 
@@ -310,8 +311,6 @@ kube::multinode::turndown(){
     read -p "Do you want to clean /var/lib/kubelet? [y/N] " clean_kubelet_dir
 
     case $clean_kubelet_dir in
-      *)
-        ;; # Do nothing
       [yY]*)
         # umount if there are mounts in /var/lib/kubelet
         if [[ ! -z $(mount | grep "/var/lib/kubelet" | awk '{print $3}') ]]; then
@@ -326,6 +325,8 @@ kube::multinode::turndown(){
         # Delete the directory
         rm -rf /var/lib/kubelet
         ;;
+      *)
+        ;; # Do nothing
     esac
   fi
 
